@@ -26,10 +26,6 @@ jobs:
       - name: Package
         run: vsce package --no-dependencies
 
-      - name: Get version from tag
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -41,8 +37,6 @@ jobs:
   publish-marketplace:
     needs: build-and-release
     runs-on: ubuntu-latest
-    # Only publish when VSCODE_MARKETPLACE_TOKEN secret is configured
-    if: secrets.VSCODE_MARKETPLACE_TOKEN != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,4 +52,9 @@ jobs:
       - name: Publish to VS Code Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCODE_MARKETPLACE_TOKEN }}
-        run: vsce publish --no-dependencies --pat "$VSCE_PAT"
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCODE_MARKETPLACE_TOKEN not set, skipping marketplace publish"
+            exit 0
+          fi
+          vsce publish --no-dependencies --pat "$VSCE_PAT"

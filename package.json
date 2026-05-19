@@ -2,7 +2,7 @@
   "name": "vscode-smart-quote-select",
   "displayName": "Smart Quote Select",
   "description": "Select inside the nearest single or double quotes on the current line.",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "publisher": "Gwen0x4c3",
   "engines": {
     "vscode": "^1.80.0"

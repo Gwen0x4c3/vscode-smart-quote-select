@@ -1,0 +1,50 @@
+{
+  "name": "vscode-smart-quote-select",
+  "displayName": "Smart Quote Select",
+  "description": "Select inside the nearest single or double quotes on the current line.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:smartQuoteSelect.selectInside",
+    "onCommand:smartQuoteSelect.selectAround",
+    "onCommand:smartQuoteSelect.deleteInside",
+    "onCommand:smartQuoteSelect.deleteAround",
+    "onCommand:smartQuoteSelect.changeInside",
+    "onCommand:smartQuoteSelect.changeAround"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "smartQuoteSelect.selectInside",
+        "title": "Smart Quote Select: Select Inside Quotes"
+      },
+      {
+        "command": "smartQuoteSelect.selectAround",
+        "title": "Smart Quote Select: Select Around Quotes"
+      },
+      {
+        "command": "smartQuoteSelect.deleteInside",
+        "title": "Smart Quote Select: Delete Inside Quotes"
+      },
+      {
+        "command": "smartQuoteSelect.deleteAround",
+        "title": "Smart Quote Select: Delete Around Quotes"
+      },
+      {
+        "command": "smartQuoteSelect.changeInside",
+        "title": "Smart Quote Select: Change Inside Quotes"
+      },
+      {
+        "command": "smartQuoteSelect.changeAround",
+        "title": "Smart Quote Select: Change Around Quotes"
+      }
+    ]
+  }
+}

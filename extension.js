@@ -10,7 +10,8 @@ try {
 
 /**
  * Find quote pairs on one line and return the best pair containing the cursor.
- * Supports single quote, double quote and backtick. Escaped quotes like \" and \' are ignored.
+ * Supports single quote, double quote only. Backticks are handled separately
+ * via multi-line search to support Go raw strings etc.
  *
  * Selection rule:
  * 1. Only consider quote pairs whose range contains the cursor.
@@ -20,7 +21,7 @@ try {
 function findBestQuotePair(lineText, cursorCharacter) {
   const pairs = [];
 
-  for (const quote of ['"', "'", '`']) {
+  for (const quote of ['"', "'"]) {
     const stack = [];
 
     for (let i = 0; i < lineText.length; i++) {
@@ -63,23 +64,22 @@ function isEscaped(text, index) {
 // ─── Multi-line backtick pair finder (for Go raw strings etc.) ──────────
 
 /**
- * Find a backtick pair that may span multiple lines, starting from the cursor line.
+ * Find a backtick pair that may span multiple lines, starting from the cursor position.
  * Scans backward to find the opening backtick, then forward to find the closing one.
  * Returns { startLine, startChar, endLine, endChar } or undefined.
  */
 function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
   const lineCount = doc.lineCount;
 
-  // Phase 1: Scan backward from cursor line to find an unmatched opening backtick
+  // Phase 1: Scan backward from cursor position to find an unmatched opening backtick
   let openLine = -1;
   let openChar = -1;
-  let depth = 0; // track nesting: +1 for `, -1 for match
+  let depth = 0;
 
-  // First check current line up to cursor
+  // Current line: scan from cursor char leftward
   const curLineText = doc.lineAt(cursorLine).text;
   for (let i = cursorChar; i >= 0; i--) {
     if (curLineText[i] === '`') {
-      // Backticks are never escaped in Go raw strings
       if (depth === 0) {
         openLine = cursorLine;
         openChar = i;
@@ -89,7 +89,7 @@ function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
     }
   }
 
-  // Then scan earlier lines bottom-up
+  // Earlier lines: scan bottom-up
   if (openLine === -1) {
     for (let ln = cursorLine - 1; ln >= 0; ln--) {
       const text = doc.lineAt(ln).text;
@@ -114,7 +114,7 @@ function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
   let closeLine = -1;
   let closeChar = -1;
 
-  // Rest of opening line (after the opening backtick)
+  // Rest of opening line after the opening backtick
   const openLineText = doc.lineAt(openLine).text;
   for (let i = openChar + 1; i < openLineText.length; i++) {
     if (openLineText[i] === '`') {
@@ -125,7 +125,6 @@ function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
   }
 
   if (closeLine === -1) {
-    // Search subsequent lines
     for (let ln = openLine + 1; ln < lineCount; ln++) {
       const text = doc.lineAt(ln).text;
       for (let i = 0; i < text.length; i++) {
@@ -154,18 +153,37 @@ function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
 
 /**
  * Get the target selection range for a given editor selection.
- * Tries single-line first, then falls back to multi-line backtick search.
+ * Strategy:
+ * 1. Run multi-line search for backtick first (Go raw strings, template literals)
+ * 2. Run single-line search for " and '
+ * 3. Backtick wins when present — because if cursor is inside a backtick-delimited
+ *    string, the inner "/' are just content characters, not structural quotes.
  */
 function getTargetRange(editor, selection, around) {
   const doc = editor.document;
   const pos = selection.active;
   const line = doc.lineAt(pos.line);
 
-  // Try single-line first
-  const pair = findBestQuotePair(line.text, pos.character);
-  if (pair) {
-    const startChar = around ? pair.start : pair.start + 1;
-    const endChar = around ? pair.end + 1 : pair.end;
+  // Multi-line: backtick (handles both single-line and multi-line cases)
+  const multi = findBacktickPairMultiLine(doc, pos.line, pos.character);
+
+  // Single-line: only " and '
+  const single = findBestQuotePair(line.text, pos.character);
+
+  // Backtick takes priority when found — inner " and ' are just string content
+  if (multi) {
+    const sChar = around ? multi.startChar : multi.startChar + 1;
+    const eChar = around ? multi.endChar + 1 : multi.endChar;
+    if (!around && multi.startLine === multi.endLine && eChar <= sChar) return undefined;
+    return new vscode.Range(
+      new vscode.Position(multi.startLine, sChar),
+      new vscode.Position(multi.endLine, eChar),
+    );
+  }
+
+  if (single) {
+    const startChar = around ? single.start : single.start + 1;
+    const endChar = around ? single.end + 1 : single.end;
     if (endChar < startChar) return undefined;
     return new vscode.Range(
       new vscode.Position(pos.line, startChar),
@@ -173,20 +191,7 @@ function getTargetRange(editor, selection, around) {
     );
   }
 
-  // Fallback: try multi-line backtick (for Go raw strings, etc.)
-  const multi = findBacktickPairMultiLine(doc, pos.line, pos.character);
-  if (!multi) return undefined;
-
-  const sChar = around ? multi.startChar : multi.startChar + 1;
-  const eChar = around ? multi.endChar + 1 : multi.endChar;
-
-  // If selecting inside and it's a single-line pair with no content, skip
-  if (!around && multi.startLine === multi.endLine && eChar <= sChar) return undefined;
-
-  return new vscode.Range(
-    new vscode.Position(multi.startLine, sChar),
-    new vscode.Position(multi.endLine, eChar),
-  );
+  return undefined;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────
@@ -216,7 +221,6 @@ async function deleteSmartQuotes(around, enterInsertMode) {
   const ranges = editor.selections
     .map((selection) => getTargetRange(editor, selection, around))
     .filter(Boolean)
-    // Delete from bottom/right to top/left to keep ranges stable.
     .sort((a, b) => b.start.compareTo(a.start));
 
   if (ranges.length === 0) return;
@@ -227,8 +231,6 @@ async function deleteSmartQuotes(around, enterInsertMode) {
     }
   });
 
-  // Put cursor at deletion start positions. After edit, VSCode keeps selection reasonably,
-  // but setting it explicitly makes behavior closer to Vim's change/delete.
   const newSelections = ranges
     .slice()
     .sort((a, b) => a.start.compareTo(b.start))

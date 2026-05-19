@@ -6,9 +6,11 @@ try {
   vscode = undefined;
 }
 
+// ─── Single-line quote pair finder ──────────────────────────────────────
+
 /**
  * Find quote pairs on one line and return the best pair containing the cursor.
- * Supports single quote and double quote. Escaped quotes like \" and \' are ignored.
+ * Supports single quote, double quote and backtick. Escaped quotes like \" and \' are ignored.
  *
  * Selection rule:
  * 1. Only consider quote pairs whose range contains the cursor.
@@ -18,7 +20,7 @@ try {
 function findBestQuotePair(lineText, cursorCharacter) {
   const pairs = [];
 
-  for (const quote of ['"', "'"]) {
+  for (const quote of ['"', "'", '`']) {
     const stack = [];
 
     for (let i = 0; i < lineText.length; i++) {
@@ -58,23 +60,136 @@ function isEscaped(text, index) {
   return slashCount % 2 === 1;
 }
 
+// ─── Multi-line backtick pair finder (for Go raw strings etc.) ──────────
+
+/**
+ * Find a backtick pair that may span multiple lines, starting from the cursor line.
+ * Scans backward to find the opening backtick, then forward to find the closing one.
+ * Returns { startLine, startChar, endLine, endChar } or undefined.
+ */
+function findBacktickPairMultiLine(doc, cursorLine, cursorChar) {
+  const lineCount = doc.lineCount;
+
+  // Phase 1: Scan backward from cursor line to find an unmatched opening backtick
+  let openLine = -1;
+  let openChar = -1;
+  let depth = 0; // track nesting: +1 for `, -1 for match
+
+  // First check current line up to cursor
+  const curLineText = doc.lineAt(cursorLine).text;
+  for (let i = cursorChar; i >= 0; i--) {
+    if (curLineText[i] === '`') {
+      // Backticks are never escaped in Go raw strings
+      if (depth === 0) {
+        openLine = cursorLine;
+        openChar = i;
+      } else {
+        depth--;
+      }
+    }
+  }
+
+  // Then scan earlier lines bottom-up
+  if (openLine === -1) {
+    for (let ln = cursorLine - 1; ln >= 0; ln--) {
+      const text = doc.lineAt(ln).text;
+      for (let i = text.length - 1; i >= 0; i--) {
+        if (text[i] === '`') {
+          if (depth === 0) {
+            openLine = ln;
+            openChar = i;
+            break;
+          } else {
+            depth--;
+          }
+        }
+      }
+      if (openLine !== -1) break;
+    }
+  }
+
+  if (openLine === -1) return undefined;
+
+  // Phase 2: Forward from opening backtick to find the closing one
+  let closeLine = -1;
+  let closeChar = -1;
+
+  // Rest of opening line (after the opening backtick)
+  const openLineText = doc.lineAt(openLine).text;
+  for (let i = openChar + 1; i < openLineText.length; i++) {
+    if (openLineText[i] === '`') {
+      closeLine = openLine;
+      closeChar = i;
+      break;
+    }
+  }
+
+  if (closeLine === -1) {
+    // Search subsequent lines
+    for (let ln = openLine + 1; ln < lineCount; ln++) {
+      const text = doc.lineAt(ln).text;
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] === '`') {
+          closeLine = ln;
+          closeChar = i;
+          break;
+        }
+      }
+      if (closeLine !== -1) break;
+    }
+  }
+
+  if (closeLine === -1) return undefined;
+
+  return {
+    quote: '`',
+    startLine: openLine,
+    startChar: openChar,
+    endLine: closeLine,
+    endChar: closeChar,
+  };
+}
+
+// ─── Range computation ───────────────────────────────────────────────────
+
+/**
+ * Get the target selection range for a given editor selection.
+ * Tries single-line first, then falls back to multi-line backtick search.
+ */
 function getTargetRange(editor, selection, around) {
   const doc = editor.document;
   const pos = selection.active;
   const line = doc.lineAt(pos.line);
+
+  // Try single-line first
   const pair = findBestQuotePair(line.text, pos.character);
+  if (pair) {
+    const startChar = around ? pair.start : pair.start + 1;
+    const endChar = around ? pair.end + 1 : pair.end;
+    if (endChar < startChar) return undefined;
+    return new vscode.Range(
+      new vscode.Position(pos.line, startChar),
+      new vscode.Position(pos.line, endChar),
+    );
+  }
 
-  if (!pair) return undefined;
+  // Fallback: try multi-line backtick (for Go raw strings, etc.)
+  const multi = findBacktickPairMultiLine(doc, pos.line, pos.character);
+  if (!multi) return undefined;
 
-  const startChar = around ? pair.start : pair.start + 1;
-  const endChar = around ? pair.end + 1 : pair.end;
+  const sChar = around ? multi.startChar : multi.startChar + 1;
+  const eChar = around ? multi.endChar + 1 : multi.endChar;
 
-  if (endChar < startChar) return undefined;
+  // If selecting inside and it's a single-line pair with no content, skip
+  if (!around && multi.startLine === multi.endLine && eChar <= sChar) return undefined;
+
   return new vscode.Range(
-    new vscode.Position(pos.line, startChar),
-    new vscode.Position(pos.line, endChar),
+    new vscode.Position(multi.startLine, sChar),
+    new vscode.Position(multi.endLine, eChar),
   );
 }
+
+// ─── Commands ────────────────────────────────────────────────────────────
 
 async function selectSmartQuotes(around) {
   const editor = vscode.window.activeTextEditor;
